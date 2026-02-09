@@ -1,10 +1,15 @@
 # distribution-center
 
-FIXME: description
-
-## Installation
-
-Download from http://example.com/FIXME.
+distribution-center/
+├── src/
+│   └── distribution_center/
+│       ├── core.clj    # Ядро симулятора, процессы, управление
+│       └── models.clj  # Модели данных (грузовики, товары)
+├── project.clj         # Конфигурация Leiningen
+├── README.md           # Этот файл
+├── LICENSE             # Лицензия MIT
+└── docs/
+    └── distribution-center-schema.png  # Схема системы
 
 ## Usage
 
