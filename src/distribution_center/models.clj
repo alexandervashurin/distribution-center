@@ -18,10 +18,3 @@
    {:type :food   :name "Пищевые"         :categories [{:id :bread :name "Хлеб" :weight 10 :time 4}
                                                         {:id :milk :name "Молоко" :weight 15 :time 5}
                                                         {:id :potato :name "Картофель" :weight 20 :time 6}]}])
-
-;; Проверка: пищевые товары не смешиваются с другими типами
-(defn food-item? [item]
-  (= (:type item) :food))
-
-(defn non-food-item? [item]
-  (not= (:type item) :food))
