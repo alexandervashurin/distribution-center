@@ -1,16 +1,14 @@
 (ns distribution-center.core
-  (:require [clojure.core.async :as async :refer [go go-loop chan <! >! timeout close!]]
-            [clj-time.core :as t]
-            [clj-time.format :as f]
-            [distribution-center.models :as m]
-            [clojure.pprint :as pp])
-  (:import [java.util.concurrent Executors TimeUnit]))
+  (:require [clojure.core.async :as async :refer [go go-loop chan <! >! timeout]]
+            [distribution-center.models :as m])
+  (:import [java.time LocalDateTime]
+           [java.time.format DateTimeFormatter]))
 
-;; Форматирование времени
-(def time-formatter (f/formatter "HH:mm:ss"))
+;; Форматирование времени через Java 8+ API
+(def time-formatter (DateTimeFormatter/ofPattern "HH:mm:ss"))
 
 (defn now-str []
-  (f/unparse time-formatter (t/now)))
+  (.format (LocalDateTime/now) time-formatter))
 
 ;; ===== СКЛАД =====
 ;; Структура: {:large {:furniture 100, :electronics 50}, :food {:bread 200}, ...}
@@ -31,24 +29,24 @@
       (swap! warehouse assoc-in [item-type category] new-val))
     (min weight current)))
 
-;; ===== ОЧЕРЕДИ =====
-;; Очередь ожидания разгрузки (неограниченная)
+;; ===== КАНАЛЫ =====
+;; Очередь ожидания разгрузки
 (def unloading-queue (chan))
 
-;; Порты разгрузки (3 шт) - буфер на 3 грузовика
+;; Порты разгрузки (3 шт)
 (def unloading-ports (chan 3))
 
-;; Порты загрузки (5 шт) - буфер на 5 грузовиков
+;; Порты загрузки (5 шт)
 (def loading-ports (chan 5))
 
 ;; ===== ЛОГГИРОВАНИЕ =====
 (def color-map
-  {:arrival    "\u001B[36m"   ; cyan - прибытие
-   :unloading  "\u001B[32m"   ; green - разгрузка
-   :loading    "\u001B[33m"   ; yellow - загрузка
-   :warehouse  "\u001B[34m"   ; blue - склад
-   :waiting    "\u001B[35m"   ; magenta - ожидание
-   :departure  "\u001B[31m"   ; red - отъезд
+  {:arrival    "\u001B[36m"   ; cyan
+   :unloading  "\u001B[32m"   ; green
+   :loading    "\u001B[33m"   ; yellow
+   :warehouse  "\u001B[34m"   ; blue
+   :waiting    "\u001B[35m"   ; magenta
+   :departure  "\u001B[31m"   ; red
    :reset      "\u001B[0m"})
 
 (defn log [type msg]
@@ -56,14 +54,12 @@
 
 ;; ===== ГЕНЕРАЦИЯ ГРУЗОВИКОВ =====
 (defn generate-items-for-truck [max-weight]
-  "Генерация случайных товаров для грузовика на разгрузку"
   (loop [remaining max-weight
          items []]
-    (if (<= remaining 1000) ; оставляем немного свободного места
+    (if (<= remaining 1000)
       items
       (let [item-type (rand-nth m/item-types)
             category (rand-nth (:categories item-type))
-            ;; Вес товара - случайное количество единиц
             units (inc (rand-int 5))
             weight (* units (:weight category))
             time (* units (:time category))]
@@ -78,20 +74,16 @@
                               :units units})))))))
 
 (defn generate-unloading-truck []
-  "Генерация грузовика для разгрузки"
   (let [truck-type (rand-nth m/truck-types)
         items (generate-items-for-truck (:capacity truck-type))]
     {:id (str "U-" (System/currentTimeMillis))
      :type (:id truck-type)
      :name (:name truck-type)
      :capacity (:capacity truck-type)
-     :items items
-     :arrival-time (t/now)}))
+     :items items}))
 
 (defn generate-loading-truck []
-  "Генерация грузовика для загрузки (только малый и средний)"
   (let [truck-type (rand-nth (filter #(#{:small :medium} (:id %)) m/truck-types))
-        ;; Выбираем случайный тип товара, но для пищевых - только пищевые категории
         item-type (rand-nth m/item-types)
         category (rand-nth (:categories item-type))]
     {:id (str "L-" (System/currentTimeMillis))
@@ -101,22 +93,19 @@
      :item-type (:type item-type)
      :category (:id category)
      :category-name (:name category)
-     :loaded-weight 0
-     :arrival-time (t/now)}))
+     :loaded-weight 0}))
 
 ;; ===== ПРОЦЕССЫ =====
 (defn simulate-unloading-port [port-id]
-  "Процесс разгрузки в одном порту"
   (go-loop []
     (when-let [truck (<! unloading-ports)]
       (log :unloading (str "Порт разгрузки #" port-id ": начало разгрузки грузовика " 
-                          (:id truck) " (" (:name truck) ", " (count (:items truck)) " типов товаров)"))
+                          (:id truck) " (" (:name truck) ", товаров: " (count (:items truck)) ")"))
       
-      ;; Разгружаем каждый товар
       (doseq [item (:items truck)]
         (log :unloading (str "  Порт #" port-id ": разгрузка " (:units item) " ед. " 
                             (:category-name item) " (" (:weight item) " кг)"))
-        (<! (timeout (* 100 (:time item)))) ; ускоряем для демонстрации (100 мс вместо 1 сек)
+        (<! (timeout (* 100 (:time item))))
         (add-to-warehouse (:type item) (:category item) (:weight item))
         (log :warehouse (str "  Склад: добавлено " (:weight item) " кг " (:category-name item) 
                             " (всего: " (get-warehouse-stock (:type item) (:category item)) " кг)")))
@@ -125,7 +114,6 @@
       (recur))))
 
 (defn simulate-loading-port [port-id]
-  "Процесс загрузки в одном порту"
   (go-loop []
     (when-let [truck (<! loading-ports)]
       (log :loading (str "Порт загрузки #" port-id ": начало загрузки грузовика " 
@@ -135,12 +123,12 @@
         (let [available (get-warehouse-stock (:item-type truck) (:category truck))]
           (if (pos? available)
             (let [load-weight (min remaining-capacity available)
-                  units (int (/ load-weight (:weight (first (filter #(= (:id %) (:category truck)) 
-                                                                  (:categories (first (filter #(= (:type %) (:item-type truck)) m/item-types))))))))]
-              ;; Загружаем товар
+                  category-info (first (filter #(= (:id %) (:category truck)) 
+                                              (:categories (first (filter #(= (:type %) (:item-type truck)) m/item-types))))) 
+                  units (int (/ load-weight (:weight category-info)))]
               (log :loading (str "  Порт #" port-id ": загрузка " units " ед. " (:category-name truck) 
                                 " (" load-weight " кг)"))
-              (<! (timeout (* 100 (int (/ load-weight 10))))) ; упрощённое время загрузки
+              (<! (timeout (* 100 (max 1 (int (/ load-weight 10))))))
               (remove-from-warehouse (:item-type truck) (:category truck) load-weight)
               (log :warehouse (str "  Склад: извлечено " load-weight " кг " (:category-name truck) 
                                   " (осталось: " (get-warehouse-stock (:item-type truck) (:category truck)) " кг)"))
@@ -150,8 +138,8 @@
                                     " загружен (" (+ (:loaded-weight truck) load-weight) " кг) и покинул центр"))
                 (do
                   (log :loading (str "  Порт #" port-id ": грузовик частично загружен (" 
-                                    (+ (:loaded-weight truck) load-weight) " / " (:capacity truck) " кг), ожидание товара..."))
-                  (<! (timeout 500)) ; короткое ожидание перед следующей попыткой
+                                    (+ (:loaded-weight truck) load-weight) " / " (:capacity truck) " кг)"))
+                  (<! (timeout 500))
                   (recur (- remaining-capacity load-weight)))))
             (do
               (log :waiting (str "  Порт #" port-id ": ожидание товара " (:category-name truck) " на складе..."))
@@ -161,14 +149,12 @@
       (recur))))
 
 (defn truck-generator []
-  "Генератор грузовиков на разгрузку (раз в 10 сек для демонстрации)"
   (go-loop []
-    (<! (timeout 10000)) ; 10 секунд вместо минуты для удобства демонстрации
+    (<! (timeout 10000)) ; каждые 10 секунд
     (let [truck (generate-unloading-truck)]
       (log :arrival (str "Прибыл грузовик на разгрузку: " (:id truck) 
                         " (" (:name truck) ", товаров: " (count (:items truck)) ")"))
       
-      ;; Проверяем наличие свободного порта
       (if (> (async/count unloading-ports) 0)
         (>! unloading-ports truck)
         (do
@@ -177,9 +163,8 @@
       (recur))))
 
 (defn loading-truck-supplier []
-  "Поставщик грузовиков на загрузку (постоянно)"
   (go-loop []
-    (<! (timeout 3000)) ; каждые 3 секунды новый грузовик на загрузку
+    (<! (timeout 3000)) ; каждые 3 секунды
     (let [truck (generate-loading-truck)]
       (log :arrival (str "Прибыл грузовик на загрузку: " (:id truck) 
                         " (" (:name truck) " для " (:category-name truck) ")"))
@@ -187,61 +172,53 @@
       (recur))))
 
 (defn queue-manager []
-  "Менеджер очереди ожидания разгрузки"
   (go-loop []
     (when-let [truck (<! unloading-queue)]
-      ;; Ждём освобождения порта
       (<! unloading-ports)
       (log :unloading (str "Грузовик " (:id truck) " из очереди перемещён в порт разгрузки"))
       (>! unloading-ports truck))
     (recur)))
 
 (defn print-status []
-  "Периодическая печать статуса склада"
   (go-loop []
     (<! (timeout 15000))
-    (log :warehouse (str "=== СОСТОЯНИЕ СКЛАДА ==="))
+    (log :warehouse "=== СОСТОЯНИЕ СКЛАДА ===")
     (doseq [[item-type categories] @warehouse
             :when (seq categories)]
-      (let [type-name (:name (first (filter #(= (:type %) item-type) m/item-types)))]
-        (log :warehouse (str "Тип: " type-name))
+      (let [type-info (first (filter #(= (:type %) item-type) m/item-types))]
+        (log :warehouse (str "Тип: " (:name type-info)))
         (doseq [[cat weight] categories]
-          (let [cat-name (:name (first (filter #(= (:id %) cat) 
-                                              (:categories (first (filter #(= (:type %) item-type) m/item-types))))))]
-            (log :warehouse (str "  " cat-name ": " weight " кг"))))))
+          (let [cat-info (first (filter #(= (:id %) cat) (:categories type-info)))]
+            (log :warehouse (str "  " (:name cat-info) ": " weight " кг"))))))
     (log :warehouse "========================")
     (recur)))
 
 (defn start-simulation []
-  "Запуск всей симуляции"
-  (log :warehouse "Инициализация распределительного центра...")
-  (log :warehouse "Конфигурация: 3 порта разгрузки, 5 портов загрузки")
-  (log :warehouse "Типы грузовиков: малый (5т), средний (10т), большой (20т)")
-  (log :warehouse "Типы товаров: крупногабаритные, среднегабаритные, малогабаритные, пищевые")
-  (log :warehouse "Пищевые товары не смешиваются с другими типами")
+  (println (str (color-map :warehouse) "╔══════════════════════════════════════════════════════════════╗" (color-map :reset)))
+  (println (str (color-map :warehouse) "║  СИМУЛЯТОР РАСПРЕДЕЛИТЕЛЬНОГО ЦЕНТРА                      ║" (color-map :reset)))
+  (println (str (color-map :warehouse) "╠══════════════════════════════════════════════════════════════╣" (color-map :reset)))
+  (println (str (color-map :warehouse) "║  Конфигурация: 3 порта разгрузки, 5 портов загрузки      ║" (color-map :reset)))
+  (println (str (color-map :warehouse) "║  Грузовики: малый(5т), средний(10т), большой(20т)         ║" (color-map :reset)))
+  (println (str (color-map :warehouse) "║  Товары: крупногабаритные, среднегабаритные,              ║" (color-map :reset)))
+  (println (str (color-map :warehouse) "║          малогабаритные, пищевые                          ║" (color-map :reset)))
+  (println (str (color-map :warehouse) "║  Пищевые товары НЕ смешиваются с другими типами           ║" (color-map :reset)))
+  (println (str (color-map :warehouse) "╚══════════════════════════════════════════════════════════════╝" (color-map :reset)))
   (println)
   
-  ;; Запуск портов разгрузки
-  (dotimes [i 3]
-    (simulate-unloading-port (inc i)))
+  ;; Запуск портов
+  (dotimes [i 3] (simulate-unloading-port (inc i)))
+  (dotimes [i 5] (simulate-loading-port (inc i)))
   
-  ;; Запуск портов загрузки
-  (dotimes [i 5]
-    (simulate-loading-port (inc i)))
-  
-  ;; Запуск генераторов и менеджеров
+  ;; Запуск менеджеров
   (truck-generator)
   (loading-truck-supplier)
   (queue-manager)
   (print-status)
   
   (log :warehouse "Симуляция запущена! Для остановки нажмите Ctrl+C")
-  (log :warehouse "(Время ускорено для демонстрации: 1 сек = 10 сек реального времени)")
+  (log :warehouse "(Время ускорено: генерация грузовиков каждые 10 сек вместо 1 мин)")
   (println))
 
 (defn -main []
   (start-simulation)
-  ;; Бесконечный цикл для удержания основного потока
-  (loop []
-    (Thread/sleep 1000)
-    (recur)))
+  (loop [] (Thread/sleep 1000) (recur)))
