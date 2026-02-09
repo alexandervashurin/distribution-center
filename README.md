@@ -1,5 +1,5 @@
 # distribution-center
-
+```
 distribution-center/
 ├── src/
 │   └── distribution_center/
@@ -9,8 +9,7 @@ distribution-center/
 ├── README.md           # Этот файл
 ├── LICENSE             # Лицензия MIT
 └── docs/
-    └── distribution-center-schema.png  # Схема системы
-
+    └── distribution-center-schema.png  # Схема системы ```
 ## Usage
 
 FIXME: explanation
